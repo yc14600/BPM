@@ -8,24 +8,69 @@ import numpy as np
 import six
 
 import train_utils as util
-from edward.models import Normal,Bernoulli,Categorical,Gamma,TransformedDistribution
+from edward.models import Normal,Bernoulli,Categorical,Gamma,TransformedDistribution,RandomVariable
 
 
 class MultiClass_BPM:
-    def __init__(self,N,B,H,M,x_ph,y_ph,noisePrecisionPriorParams=(1,1)):
+    def __init__(self,N,B,H,M,x_ph,y_ph):
         self.N = N  # number of training data
         self.B = B  # batch size
         self.H = H  # number of classes
         self.M = M  # number of features
         self.x_ph = x_ph
         self.y_ph = y_ph
-        
+    
+    def define_model(self,weights_mean_prior=None,weights_precision_prior=None,noisePrecisionPrior=None):
         ds = tf.contrib.distributions 
-        self.noise_p = Gamma(tf.ones(1)*noisePrecisionPriorParams[0],tf.ones(1)*noisePrecisionPriorParams[1])
-        self.q_noise_p = TransformedDistribution(distribution=Normal(loc=tf.Variable(tf.random_normal([1])), scale=tf.nn.softplus(tf.Variable(tf.random_normal([1])))),bijector=ds.bijectors.Exp())
-        self.w = Normal(tf.zeros([H,M]),tf.ones([H,M]))
-        self.qw = Normal(tf.Variable(tf.random_normal([H,M])), tf.nn.softplus(tf.Variable(tf.random_normal([H,M]))))
-        self.y = Categorical(tf.nn.softmax(Normal(tf.matmul(x_ph,tf.transpose(self.w)), 1./tf.sqrt(self.noise_p))))
+        H = self.H
+        M = self.M
+        if noisePrecisionPrior==None:
+            self.noise_p = Gamma(tf.ones([1]),tf.ones([1]))
+        else:
+            if isinstance(noisePrecisionPrior,RandomVariable):
+                self.noise_p = noisePrecisionPrior
+            else:
+                raise TypeError('Not supported prios type!')
+        self.q_noise_p = TransformedDistribution(distribution=Normal(loc=tf.Variable(tf.random_normal([1])), \
+                                scale=tf.nn.softplus(tf.Variable(tf.random_normal([1])))),bijector=ds.bijectors.Exp())
+        
+        if weights_mean_prior==None:
+            self.w_mean = tf.zeros([H,M])  
+            self.qw_mean = tf.Variable(tf.random_normal([H,M]))          
+        else:               
+            if isinstance(weights_mean_prior,Normal) or (isinstance(weights_mean_prior,int) \
+            or isinstance(weights_mean_prior,float)) or isinstance(weights_mean_prior,np.ndarray):
+                self.w_mean = weights_mean_prior 
+                if isinstance(weights_mean_prior,Normal):
+                    #print('mean prior normal')
+                    self.qw_mean = Normal(tf.Variable(tf.random_normal([H,M])), tf.nn.softplus(tf.Variable(tf.random_normal([H,M]))))
+                else:
+                    #print('mean prior scalor')
+                    self.qw_mean = tf.Variable(tf.random_normal([H,M]))
+            else:
+                raise TypeError('Not supported prios type!')
+
+        if weights_precision_prior==None:
+            self.w_precision = tf.ones([H,M])
+            self.qw_precision = tf.nn.softplus(tf.Variable(tf.random_normal([H,M])))
+        else:
+            if isinstance(weights_precision_prior,Gamma) or isinstance(weights_precision_prior,int) \
+            or isinstance(weights_precision_prior,float) or isinstance(weights_precision_prior,np.ndarray):
+                self.w_precision = weights_precision_prior
+                if isinstance(weights_precision_prior,Gamma):
+                    self.qw_precision = TransformedDistribution(distribution=Normal(loc=tf.Variable(tf.random_normal([H,M])), \
+                                scale=tf.nn.softplus(tf.Variable(tf.random_normal([H,M])))),bijector=ds.bijectors.Exp())
+                else:
+                    self.qw_precision = tf.nn.softplus(tf.Variable(tf.random_normal([H,M])))
+            else:
+                raise TypeError('Not supported prios type!')
+
+        self.w = Normal(self.w_mean,1./tf.sqrt(self.w_precision))
+        #self.w = Normal(self.w_mean,(self.w_precision))
+        #self.qw = Normal(tf.Variable(tf.random_normal([H,M])), tf.nn.softplus(tf.Variable(tf.random_normal([H,M]))))
+        #self.qw = Normal(self.qw_mean, self.qw_precision)
+        self.qw = Normal(self.qw_mean, 1./tf.sqrt(self.qw_precision))
+        self.y = Categorical(tf.nn.softmax(Normal(tf.matmul(self.x_ph,tf.transpose(self.w)), 1./tf.sqrt(self.noise_p))))
         #self.y_test = tf.nn.softmax(tf.matmul(x_ph,tf.transpose(qw.loc)))
         
      
@@ -38,11 +83,15 @@ class MultiClass_BPM:
         self.scaling = float(self.N) / self.B
         self.niter = niter
         self.nprint = nprint
-
+        latent_vars = {self.w:self.qw,self.noise_p:self.q_noise_p}
         if infer_type == 'EP':
             self.inference = ed.KLpq({self.w:self.qw,self.noise_p:self.q_noise_p},data={self.y:self.y_ph})
         elif infer_type == 'VI':
-            self.inference = ed.KLqp({self.w:self.qw,self.noise_p:self.q_noise_p},data={self.y:self.y_ph})
+            if isinstance(self.w_mean,Normal):
+                latent_vars[self.w_mean] = self.qw_mean
+            if isinstance(self.w_precision,Gamma):
+                latent_vars[self.w_precision] = self.qw_precision
+            self.inference = ed.KLqp(latent_vars,data={self.y:self.y_ph})
         elif infer_type == 'HMC':
             self.inference = ed.HMC({self.w:self.qw},data={self.y:self.y_ph})
         else:
@@ -60,26 +109,22 @@ class MultiClass_BPM:
 
             info_dict = self.inference.update(feed_dict={self.x_ph:x_batch,self.y_ph:y_batch})
             self.inference.print_progress(info_dict)
-
+            '''
             if t % self.nprint == 0:
                 print('\n w mean:')
                 print(np.mean(self.sess.run(self.qw)))
+            '''
                 
     def predict(self, X_test, Y_test, proba=False):
-        y_test = tf.nn.softmax(tf.matmul(self.x_ph,tf.transpose(self.qw.loc)))
+        
+        x_test_ph = tf.placeholder(tf.float32, [X_test.shape[0],X_test.shape[1]])
+        y_test = tf.nn.softmax(tf.matmul(x_test_ph,tf.transpose(self.qw.loc)))
         ii = 0
         acu = 0
         N_test = X_test.shape[0]
-        y_predict = np.zeros(N_test)
-        for i in range(int(np.floor(N_test/self.B))):
-            x_batch,y_batch,ii = util.get_next_batch(X_test,self.B,ii,Y_test)
-            y_test_batch = self.sess.run(y_test,feed_dict={self.x_ph:x_batch,self.y_ph:y_batch})
-            if proba:
-                y_predict[ii:ii+self.B] = y_test_batch
-            else:
-                y_predict[ii:ii+self.B] = np.argmax(y_test_batch,axis=1)
-                
-            acu += sum(np.argmax(y_test_batch,axis=1)==y_batch)
+        y_predict = np.argmax(self.sess.run(y_test,feed_dict={x_test_ph:X_test}),axis=1)
+        acu = sum(y_predict==Y_test)
+        
         print('Test accuracy: ', acu*1./N_test)
         return y_predict
     
