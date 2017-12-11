@@ -11,7 +11,7 @@ import matplotlib.gridspec as gridspec
 
 def get_next_batch(data, B, ii,labels=None):
     if ii+B < data.shape[0]:
-        if labels!=None:
+        if not labels is None:
             return data[ii:ii+B],labels[ii:ii+B],ii+B
             
         else:
@@ -20,7 +20,7 @@ def get_next_batch(data, B, ii,labels=None):
         r = ii+B-data.shape[0]
         ids = np.array(range(data.shape[0]))
         batch = data[(ids>=ii)|(ids<r)]
-        if labels == None:
+        if labels is None:
             return batch,labels,r
         else:
             return batch,labels[(ids>=ii)|(ids<r)],r
