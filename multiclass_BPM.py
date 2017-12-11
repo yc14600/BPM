@@ -38,8 +38,7 @@ class MultiClass_BPM:
             self.w_mean = tf.zeros([H,M])  
             self.qw_mean = tf.Variable(tf.random_normal([H,M]))          
         else:               
-            if isinstance(weights_mean_prior,Normal) or (isinstance(weights_mean_prior,int) \
-            or isinstance(weights_mean_prior,float)) or isinstance(weights_mean_prior,np.ndarray):
+            if isinstance(weights_mean_prior,(Normal,int,float,np.ndarray)):
                 self.w_mean = weights_mean_prior 
                 if isinstance(weights_mean_prior,Normal):
                     #print('mean prior normal')
@@ -54,8 +53,7 @@ class MultiClass_BPM:
             self.w_precision = tf.ones([H,M])
             self.qw_precision = tf.nn.softplus(tf.Variable(tf.random_normal([H,M])))
         else:
-            if isinstance(weights_precision_prior,Gamma) or isinstance(weights_precision_prior,int) \
-            or isinstance(weights_precision_prior,float) or isinstance(weights_precision_prior,np.ndarray):
+            if isinstance(weights_precision_prior,(Gamma,int,float,np.ndarray)):
                 self.w_precision = weights_precision_prior
                 if isinstance(weights_precision_prior,Gamma):
                     self.qw_precision = TransformedDistribution(distribution=Normal(loc=tf.Variable(tf.random_normal([H,M])), \
